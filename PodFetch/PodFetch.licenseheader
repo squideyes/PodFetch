@@ -1,6 +1,7 @@
-﻿#region Copyright, Author Details and Related Context
-//<notice lastUpdateOn="8/23/2013">
-//  <assembly>PodFetch</assembly>
+extensions: .cs
+#region Copyright, Author Details and Related Context
+//<notice lastUpdateOn="%CurrentMonth%/%CurrentDay%/%CurrentYear%">
+//  <assembly>%Namespace%</assembly>
 //  <description>A simple "Astronomy Picture Of The Day" (APOD) downloader that leverages TPL Dataflow</description>
 //  <copyright>
 //    Copyright (C) 2013 Louis S. Berman
@@ -25,23 +26,3 @@
 //  </author>
 //</notice>
 #endregion 
-
-namespace PodFetch
-{
-    public enum Status
-    {
-        Info,
-        Scraping,
-        Scraped,
-        Fetching,
-        Fetched,
-        DupImage,
-        BadScrape,
-        BadFetch,
-        BadGetUrls,
-        NoImage,
-        Cancelled,
-        Failure,
-        Finished
-    }
-}
