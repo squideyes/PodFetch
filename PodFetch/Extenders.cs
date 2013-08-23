@@ -1,9 +1,5 @@
-﻿using HtmlAgilityPack;
-using System;
-using System.Collections.Generic;
-using System.Diagnostics.Contracts;
+﻿using System;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
@@ -60,8 +56,7 @@ namespace PodFetch
             {
                 Console.ForegroundColor = colors[(int)status];
 
-                Console.WriteLine("{0} {1}",
-                    status.ToString().PadRight(8), string.Format(format, args));
+                Console.WriteLine("{0,-10} {1}",status, string.Format(format, args));
             }
         }
     }

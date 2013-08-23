@@ -1,6 +1,5 @@
 ﻿using Nito.AsyncEx;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -14,8 +13,13 @@ namespace PodFetch
 {
     class Program
     {
-        private static ConcurrentDictionary<string, bool> urls =
-            new ConcurrentDictionary<string, bool>();
+        public class Link
+        {
+            public DateTime Date { get; set; }
+            public Uri PageUri { get; set; }
+            public Uri ImageUri { get; set; }
+            public string Title { get; set; }
+        }
 
         static void Main(string[] args)
         {
@@ -26,25 +30,36 @@ namespace PodFetch
 
         public static async void Fetch()
         {
+            var startOn = DateTime.UtcNow;
+
             var imageRegex = new Regex("(?<=<IMG\\sSRC=\").*?(?=\"\\s.*?>)",
-                RegexOptions.IgnoreCase | RegexOptions.Singleline |
-                RegexOptions.CultureInvariant | RegexOptions.Compiled);
+                RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
             var cts = new CancellationTokenSource();
 
-            var scraper = new TransformBlock<Uri, Uri>(
-                async uri =>
+            var scraper = new TransformBlock<Link, Link>(
+                async link =>
                 {
                     try
                     {
-                        var html = await new HttpClient().GetStringAsync(uri);
+                        Status.Scraping.Log(link.PageUri.AbsoluteUri);
 
-                        return new Uri(Properties.Settings.Default.BaseUri,
-                            imageRegex.Match(html).Value);
+                        var html = await new HttpClient().GetStringAsync(link.PageUri);
+
+                        var src = imageRegex.Match(html).Value;
+
+                        if (string.IsNullOrWhiteSpace(src))
+                            return null;
+
+                        link.ImageUri = new Uri(Properties.Settings.Default.BaseUri, src);
+
+                        Status.Scraped.Log(link.PageUri.AbsoluteUri);
+
+                        return link;
                     }
                     catch (Exception error)
                     {
-                        Status.Error.Log("SCRAPE: " + error.Message);
+                        Status.BadFetch.Log("SCRAPE: " + error.Message);
 
                         return null;
                     }
@@ -52,44 +67,45 @@ namespace PodFetch
                 new ExecutionDataflowBlockOptions()
                 {
                     CancellationToken = cts.Token,
-                    MaxDegreeOfParallelism = DataflowBlockOptions.Unbounded
+                    MaxDegreeOfParallelism = 1 //DataflowBlockOptions.Unbounded
                 });
 
-            var fetcher = new ActionBlock<Uri>(
-               async uri =>
+            var fetcher = new ActionBlock<Link>(
+               async link =>
                {
                    try
                    {
-                       var fileName = Path.Combine(
-                           Properties.Settings.Default.SaveToPath,
-                           Path.GetFileName(uri.AbsoluteUri));
-
-                       var nameOnly = Path.GetFileName(fileName);
+                       var fileName = Path.Combine(Properties.Settings.Default.SaveToPath, 
+                           Path.GetFileName(link.ImageUri.AbsoluteUri)).ToLower();
 
                        if (File.Exists(fileName))
                        {
-                           Status.DupImage.Log(nameOnly);
+                           Status.DupImage.Log(Path.GetFileName(fileName));
 
                            return;
                        }
 
-                       await uri.Download(fileName);
+                       var nameOnly = Path.GetFileName(fileName);
 
-                       Status.Fetch.Log(nameOnly);
+                       Status.Fetching.Log("{0:MM/dd/yyyy} - {1}", link.Date, nameOnly);
+
+                       await link.ImageUri.Download(fileName);
+
+                       Status.Fetched.Log("{0:MM/dd/yyyy} - {1}", link.Date, nameOnly);
                    }
                    catch (Exception error)
                    {
-                       Status.Error.Log(error.Message);
+                       Status.BadFetch.Log(error.Message);
                    }
                },
                new ExecutionDataflowBlockOptions()
                {
                    CancellationToken = cts.Token,
-                   MaxDegreeOfParallelism = DataflowBlockOptions.Unbounded
+                   MaxDegreeOfParallelism = 8 //DataflowBlockOptions.Unbounded
                });
 
             scraper.LinkTo(fetcher, uri => uri != null);
-            scraper.LinkTo(DataflowBlock.NullTarget<Uri>());
+            scraper.LinkTo(DataflowBlock.NullTarget<Link>());
 
             scraper.HandleCompletion(fetcher);
 
@@ -97,93 +113,45 @@ namespace PodFetch
 
             try
             {
-                var uris = await GetUris();
+                var links = await GetLinks();
 
-                Status.Info.Log("Parsed {0:N0} URIs", uris.Count);
+                Status.Info.Log("Parsed {0:N0} URIs", links.Count);
 
-                uris = uris.Take(Properties.Settings.Default.MaxToFetch).ToList();
+                links = links.Take(Properties.Settings.Default.MaxToFetch).ToList();
 
-                Status.Info.Log("Queued {0:N0} images to be downloaded", uris.Count);
+                Status.Info.Log("Queued {0:N0} images to be downloaded", links.Count);
+
+                links.ForEach(link => scraper.Post(link));
             }
             catch (Exception error)
             {
-                Status.Info.Log("Fetching APOD's archive list");
+                Status.BadFetch.Log("GETURLS:" + error.Message);
             }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            //scraper.Post(new Link(Properties.Settings.Default.BaseUri.AbsoluteUri,
-            //    LinkKind.Html, Properties.Settings.Default.BaseUri));
-
-            //Status.Info.Log("Crawling...");
-
-            //Console.ReadKey();
-
-            //cts.Cancel();
-
-            //Status.Info.Log("Stopping...");
-
-            //try
-            //{
-            //    await Task.WhenAll(
-            //        scraper.Completion,
-            //        parser.Completion,
-            //        fetcher.Completion);
-            //}
-            //catch (OperationCanceledException)
-            //{
-            //    Status.Info.Log("Stopped!");
-            //}
-            //catch (Exception error)
-            //{
-            //    Status.Error.Log(error.Message);
-            //}
-
-            Console.WriteLine();
-            Console.Write("Press any key to continue...");
 
             Console.ReadKey();
         }
 
-        private static async Task<List<Uri>> GetUris()
+        private static async Task<List<Link>> GetLinks()
         {
-            const string PATTERN =
-                "(?<DATE>\\d{4}\\s.*?\\d{2}):\\s*? <a\\shref=\"(?<PAGE>ap\\d{6}.html)\">(?<TITLE>.*?)</a>";
+            const string PATTERN = "(?<DATE>\\d{4}\\s.*?\\d{2}):\\s*? <a\\shref=\"(?<PAGE>ap\\d{6}.html)\">(?<TITLE>.*?)</a>";
 
             var html = await new HttpClient().GetStringAsync(Properties.Settings.Default.ArchiveUri);
 
-            var regex = new Regex(PATTERN,
-                RegexOptions.CultureInvariant | RegexOptions.Compiled);
+            var regex = new Regex(PATTERN, RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-            var uris = new List<Uri>();
+            var links = new List<Link>();
 
             foreach (Match match in regex.Matches(html))
-                uris.Add(new Uri(Properties.Settings.Default.BaseUri + match.Groups[2].Value));
+            {
+                links.Add(new Link()
+                {
+                    Date = DateTime.Parse(match.Groups[1].Value),
+                    PageUri = new Uri(Properties.Settings.Default.BaseUri + match.Groups[2].Value),
+                    Title = match.Groups[3].Value
+                });
+            }
 
-            return uris;
+            return links;
         }
     }
 }

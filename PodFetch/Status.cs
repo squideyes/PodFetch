@@ -3,11 +3,12 @@
     public enum Status
     {
         Info,
-        Scrape,
-        Fetch,
-        Parse,
+        Scraping,
+        Scraped,
+        Fetching,
+        Fetched,
         DupImage,
-        DupLink,
-        Error
+        BadScrape,
+        BadFetch
     }
 }
